@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { post } from "../../lib/api";
+import PasswordInput from "../../components/PasswordInput";
 
 export default function ResetPage() {
   const [password, setPassword] = useState("");
@@ -30,9 +31,9 @@ export default function ResetPage() {
         ) : (
           <>
             <label htmlFor="np">New password</label>
-            <input id="np" type="password" autoComplete="new-password" minLength={12} required value={password} onChange={e => setPassword(e.target.value)} />
+            <PasswordInput id="np" autoComplete="new-password" minLength={12} required value={password} onChange={e => setPassword(e.target.value)} />
             <label htmlFor="cp">Confirm password</label>
-            <input id="cp" type="password" autoComplete="new-password" minLength={12} required value={confirm} onChange={e => setConfirm(e.target.value)} />
+            <PasswordInput id="cp" autoComplete="new-password" minLength={12} required value={confirm} onChange={e => setConfirm(e.target.value)} />
             <p>Use at least 12 characters.</p>
             {error && <p role="alert" className="err">{error}</p>}
             <button className="btn">Set new password</button>

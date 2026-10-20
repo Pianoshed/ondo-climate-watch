@@ -1,0 +1,4 @@
+.pw-wrap{position:relative;display:block}
+.pw-wrap input{padding-right:4.5rem}
+.pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;cursor:pointer;font:inherit;font-size:13px;color:var(--acc);padding:2px 4px}
+.pw-toggle:hover{text-decoration:underline}
