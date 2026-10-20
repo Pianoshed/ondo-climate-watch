@@ -16,3 +16,8 @@ node_modules/
 dist/
 build/
 .DS_Store
+
+backend/data/cache/
+*.tif
+__pycache__/
+*.pyc
