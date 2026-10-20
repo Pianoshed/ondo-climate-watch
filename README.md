@@ -1,5 +1,4 @@
-# Ondo State Climate Watch
-Climate and health data tool for Ondo State.
+# Ondo climate & health data tool
 Flask API + Supabase (Postgres) + Next.js. Monthly rainfall, temperature and humidity per Ondo LGA, with login, Excel export and charts.
 
 ## Setup, step by step
@@ -21,19 +20,38 @@ Flask API + Supabase (Postgres) + Next.js. Monthly rainfall, temperature and hum
 ## Checks and dependency audits
 - All checks at once, in CI: `.github/workflows/ci.yml` runs lint, tests, `pip-audit` and `npm audit` on every push and every Monday. Dependabot (`.github/dependabot.yml`) opens weekly upgrade pull requests.
 - Audits locally: `scripts/audit.sh` (needs `pip-audit`, from requirements-dev.txt)
-- Frontend dev tools may show a `braces` advisory in `npm audit` (no patched version exists, dev-only, never shipped). The CI check covers production dependencies.
+- `npm audit` (with dev tools) still lists 5 high findings, all from one chain inside ESLint's Next.js plugin (`braces`). No patched version exists, they run only on your computer and never ship. The CI check covers production dependencies and reports 0.
 - Backend: `ruff check . && pytest` (in `backend/`)
 - Frontend: `npm run lint && npm test && npm run build` (in `frontend/`)
 
 ## API (all need login except health and login)
 `GET /api/health` · `POST /api/auth/login` · `/api/auth/mfa` · `/api/auth/mfa/setup` · `/api/auth/mfa/enable` · `/api/auth/forgot` · `/api/auth/reset` · `POST /api/auth/logout` · `GET /api/auth/me` · `GET /api/meta` · `GET /api/data?lga=&start=YYYY-MM&end=YYYY-MM` · `GET /api/summary?variable=` · `GET /api/boundaries?variable=` (GeoJSON for maps) · `GET /api/export.xlsx`
 
-## Name, icons and metadata
-The app name and description live in `frontend/lib/brand.js`. Icons come from the Ondo State Climate Change & Health emblem:
-`app/favicon.ico`, `app/icon.png`, `app/apple-icon.png`, share cards `app/opengraph-image.png` and `app/twitter-image.png`,
-and phone-install icons in `public/`. The web app manifest is `app/manifest.js`. Because sign-in is required, pages are marked
-`noindex` (change `robots` in `app/layout.js` if you want search engines to list the login page).
-Set `NEXT_PUBLIC_SITE_URL` to the public https address **when building** so share-card links are absolute.
+## Put it on GitHub
+1. On github.com create a new **private** repository. Leave it empty (no README, no .gitignore).
+2. In the project folder (the one that contains `backend`, `frontend` and `render.yaml`):
 
-## Deploying (Render)
-Backend: set `APP_ENV=production`, `SECRET_KEY`, `DATABASE_URL`, `ALLOWED_ORIGIN` (the frontend's https URL). Frontend: set `API_URL` to the backend URL and (at build time) `NEXT_PUBLIC_SITE_URL` to the frontend's https URL. Set `FRONTEND_URL` and the `SMTP_*` values for reset emails. Use a Redis URL for `RATELIMIT_STORAGE_URI` if you run more than one worker.
+        git init -b main
+        git add .
+        git status        # check the list: there must be no .env, .venv or node_modules
+        git commit -m "Ondo climate and health data tool"
+        git remote add origin https://github.com/YOUR-USER/YOUR-REPO.git
+        git push -u origin main
+3. When Git asks for a password, paste a personal access token (GitHub > Settings > Developer settings), or sign in first with `gh auth login`.
+4. Open the repository's Actions tab. CI runs lint, tests and both audits (Python 3.14).
+
+## Deploy on Render (backend + frontend) with Supabase
+1. **Supabase:** Project Settings > Database > Connection string > *Session pooler* (works over IPv4, which Render needs). Change the start to `postgresql+psycopg2://` and URL-encode the password.
+2. **Render:** New > Blueprint > choose your repo. It creates `ondo-climate-api` (Python 3.14.3, gunicorn) and `ondo-climate-web` (Node).
+3. Fill in the three values it asks for:
+   - `DATABASE_URL`: the Supabase string from step 1
+   - `ALLOWED_ORIGIN`: the exact URL of the **web** service, e.g. `https://ondo-climate-web.onrender.com` (https, no trailing slash)
+   - `API_URL` (web service): the exact URL of the **api** service. It is read at build time, so after changing it use Manual Deploy > Clear build cache & deploy.
+   If Render adds a suffix to a name because it is taken, use the real URLs shown on each service page.
+4. **Load data** from your own computer, pointing at Supabase (Render's free plan has no shell): in `backend/`, put the Supabase `DATABASE_URL` in `.env`, then run `python manage.py init-db`, `python manage.py load-boundaries`, `python manage.py create-user you@example.org`, `python pipeline.py`.
+5. **Check the deployment:** `scripts/check_deploy.sh https://ondo-climate-web.onrender.com`. It confirms the frontend reaches the backend (not localhost), the origin settings match, HSTS is on, and shows the IP the backend sees. If it shows a Render address, raise `TRUSTED_PROXY_HOPS` by 1 on the api service, so rate limits apply per person rather than to everyone at once.
+6. Sign in, open Security, turn on two-factor sign-in.
+
+Start command (already in `render.yaml`): `gunicorn "app:create_app()" --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120`. One worker is deliberate: rate limits are kept in memory, so more workers would multiply the limits. For more than one worker, set `RATELIMIT_STORAGE_URI` to a Redis URL.
+
+Monthly refresh: run `python pipeline.py` on your computer, or add a paid Render cron job. Free Render services sleep when idle, so the first visit after a break takes about a minute.

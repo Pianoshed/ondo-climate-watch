@@ -49,6 +49,9 @@ def create_app(engine=None):
         raise RuntimeError("SECRET_KEY must be set in production")
     engine = engine or db.get_engine()
     allowed_origin = os.environ.get("ALLOWED_ORIGIN", "http://localhost:3000")
+    if prod and (not allowed_origin.startswith("https://") or "localhost" in allowed_origin or allowed_origin.endswith("/")):
+        raise RuntimeError("In production set ALLOWED_ORIGIN to the frontend's https address with no trailing slash, "
+                           "e.g. https://ondo-climate-web.onrender.com")
 
     app = Flask(__name__)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", SESSION_COOKIE_SECURE=prod,
@@ -56,7 +59,8 @@ def create_app(engine=None):
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or os.urandom(32).hex()
     vault = security.fernet(app.config["SECRET_KEY"])
     if prod:
-        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)  # real client IP behind Render/Supabase-side proxies
+        hops = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))  # verify with scripts/check_deploy.sh
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops)
     limiter = Limiter(get_remote_address, app=app, default_limits=["200/minute"],
                       storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"))
 
@@ -135,7 +139,7 @@ def create_app(engine=None):
 
     @app.get("/api/health")
     def health():
-        return jsonify(ok=True)
+        return jsonify(ok=True, ip=request.remote_addr)  # lets scripts/check_deploy.sh verify proxy settings
 
     @app.post("/api/auth/login")
     @limiter.limit("5/minute;30/hour")
@@ -173,7 +177,7 @@ def create_app(engine=None):
             abort(409, "Two-factor sign-in is already on")
         secret = pyotp.random_base32()
         session["mfa_setup"] = secret
-        uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name=security.APP_NAME)
+        uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name="Ondo Climate Data")
         return jsonify(secret=secret, qr=segno.make(uri).svg_data_uri(scale=5))
 
     @app.post("/api/auth/mfa/enable")
@@ -292,8 +296,6 @@ def create_app(engine=None):
 
     return app
 
-app = create_app()
 
 if __name__ == "__main__":
-    app.run(port=5000)
-    
+    create_app().run(port=5000)

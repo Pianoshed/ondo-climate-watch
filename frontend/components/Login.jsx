@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
 import { post } from "../lib/api";
-import Brand from "./Brand";
 
 export default function Login({ onDone }) {
   const [email, setEmail] = useState("");
@@ -34,7 +33,6 @@ export default function Login({ onDone }) {
   return (
     <div className="login">
       <form className="panel" onSubmit={submit}>
-        <div className="brandtop"><Brand size={64} /></div>
         <h1>Sign in</h1>
         {needCode ? (
           <>
@@ -44,7 +42,7 @@ export default function Login({ onDone }) {
           </>
         ) : (
           <>
-            <p>Monitoring climate change and health in Ondo State</p>
+            <p>Ondo climate and health data</p>
             <label htmlFor="em">Email</label>
             <input id="em" type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)} />
             <label htmlFor="pw">Password</label>

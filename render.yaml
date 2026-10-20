@@ -1,0 +1,26 @@
+# Render Blueprint: New > Blueprint > pick this repo. Fill in the three "sync: false" values when asked.
+services:
+  - type: web
+    name: ondo-climate-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn "app:create_app()" --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /api/health
+    envVars:
+      - { key: PYTHON_VERSION, value: 3.14.3 }
+      - { key: APP_ENV, value: production }
+      - { key: SECRET_KEY, generateValue: true }
+      - { key: TRUSTED_PROXY_HOPS, value: "1" }
+      - { key: DATABASE_URL, sync: false }   # Supabase Session pooler string, scheme postgresql+psycopg2://
+      - { key: ALLOWED_ORIGIN, sync: false } # the web service's URL, e.g. https://ondo-climate-web.onrender.com
+  - type: web
+    name: ondo-climate-web
+    runtime: node
+    rootDir: frontend
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - { key: API_URL, sync: false }        # the api service's URL, e.g. https://ondo-climate-api.onrender.com

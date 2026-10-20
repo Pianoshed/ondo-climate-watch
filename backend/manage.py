@@ -38,7 +38,8 @@ def main():
             user = c.execute(select(db.users).where(db.users.c.email == a.email.lower())).first()
         if not user:
             raise SystemExit("No such user")
-        print(f"{os.environ.get('FRONTEND_URL', 'http://localhost:3000')}/reset#token={security.issue_reset(engine, user.id)}")
+        base = os.environ.get("FRONTEND_URL") or os.environ.get("ALLOWED_ORIGIN", "http://localhost:3000")
+        print(f"{base}/reset#token={security.issue_reset(engine, user.id)}")
     else:
         create_user(engine, a.email, getpass.getpass("Password (12+ chars): "))
     print("OK")

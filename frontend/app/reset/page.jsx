@@ -1,6 +1,5 @@
 "use client";
 import { useState } from "react";
-import Brand from "../../components/Brand";
 import { post } from "../../lib/api";
 
 export default function ResetPage() {
@@ -25,7 +24,6 @@ export default function ResetPage() {
   return (
     <div className="login">
       <form className="panel" onSubmit={submit}>
-        <div className="brandtop"><Brand size={64} /></div>
         <h1>Choose a new password</h1>
         {done ? (
           <p>Password updated. <a href="/login">Sign in</a></p>

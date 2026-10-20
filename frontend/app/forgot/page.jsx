@@ -1,6 +1,5 @@
 "use client";
 import { useState } from "react";
-import Brand from "../../components/Brand";
 import { post } from "../../lib/api";
 
 export default function ForgotPage() {
@@ -22,7 +21,6 @@ export default function ForgotPage() {
   return (
     <div className="login">
       <form className="panel" onSubmit={submit}>
-        <div className="brandtop"><Brand size={64} /></div>
         <h1>Reset your password</h1>
         {done ? (
           <p>If that email has an account, a reset link is on its way. It works once and expires in 30 minutes.</p>

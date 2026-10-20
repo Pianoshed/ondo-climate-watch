@@ -50,7 +50,6 @@ test("dashboard shows LGAs, data, export link and nav", async () => {
   expect(await screen.findByText("120.5")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Download Excel" }).getAttribute("href")).toContain("/api/export.xlsx");
   expect(screen.getByRole("link", { name: "Map" })).toBeTruthy();
-  expect(screen.getByText("Ondo State Climate Watch")).toBeTruthy();
 });
 
 test("sign-in shows the server error on a wrong password", async () => {

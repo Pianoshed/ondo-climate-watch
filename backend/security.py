@@ -15,7 +15,6 @@ from sqlalchemy import delete, insert
 import db
 
 RESET_MINUTES = 30
-APP_NAME = "Ondo State Climate Watch"
 
 
 def fernet(secret_key):
@@ -60,7 +59,7 @@ def send_reset_email(to, link):
             logging.getLogger(__name__).warning("Dev only, no SMTP set. Reset link for %s: %s", to, link)
         return False
     msg = EmailMessage()
-    msg["Subject"], msg["To"] = f"Reset your {APP_NAME} password", to
+    msg["Subject"], msg["To"] = "Reset your password", to
     msg["From"] = os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER", "")
     msg.set_content(f"Use this link within {RESET_MINUTES} minutes to set a new password:\n{link}\n\n"
                     "If you did not ask for this, ignore this email.")

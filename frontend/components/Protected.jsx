@@ -3,7 +3,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { api, post } from "../lib/api";
-import Brand from "./Brand";
 
 // Wraps a page: redirects to /login when signed out, shows the nav, and passes { me, logout } to its children.
 export default function Protected({ children }) {
@@ -20,7 +19,6 @@ export default function Protected({ children }) {
   return (
     <>
       <nav className="nav">
-        <Link href="/" className="brandlink"><Brand /></Link>
         <Link href="/">Dashboard</Link>
         <Link href="/map">Map</Link>
         <Link href="/security">Security</Link>
