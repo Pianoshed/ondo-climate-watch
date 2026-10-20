@@ -22,3 +22,7 @@ th{position:sticky;top:0;background:var(--card)}.err{padding:16px 28px;color:#9f
 .nav{display:flex;gap:18px;align-items:center;padding:10px 28px;background:var(--card);border-bottom:1px solid var(--line)}
 .nav a{color:var(--ink);font-weight:600;text-decoration:none}.nav span{margin-left:auto;color:var(--mute)}
 .map{display:grid;grid-template-columns:260px 1fr;gap:20px;padding:20px 28px}@media(max-width:800px){.map{grid-template-columns:1fr}}
+.pw-wrap{position:relative;display:block}
+.pw-wrap input{padding-right:4.5rem}
+.pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;cursor:pointer;font:inherit;font-size:13px;color:var(--acc);padding:2px 4px}
+.pw-toggle:hover{text-decoration:underline}

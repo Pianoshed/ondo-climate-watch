@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { post } from "../lib/api";
+import Brand from "./Brand";
+import PasswordInput from "./PasswordInput";
 
 export default function Login({ onDone }) {
   const [email, setEmail] = useState("");
@@ -33,6 +35,7 @@ export default function Login({ onDone }) {
   return (
     <div className="login">
       <form className="panel" onSubmit={submit}>
+        <Brand />
         <h1>Sign in</h1>
         {needCode ? (
           <>
@@ -46,7 +49,7 @@ export default function Login({ onDone }) {
             <label htmlFor="em">Email</label>
             <input id="em" type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)} />
             <label htmlFor="pw">Password</label>
-            <input id="pw" type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} />
+            <PasswordInput id="pw" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} />
           </>
         )}
         {error && <p role="alert" className="err">{error}</p>}
