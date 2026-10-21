@@ -20,6 +20,7 @@ export default function Protected({ children }) {
     <>
       <nav className="nav">
         <Link href="/">Dashboard</Link>
+        <Link href="/analytics">Analytics</Link>
         <Link href="/map">Map</Link>
         <Link href="/security">Security</Link>
         <span>{me.email}</span>

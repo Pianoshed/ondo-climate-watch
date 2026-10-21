@@ -50,7 +50,7 @@ export default function Dashboard({ onLogout }) {
     <>
       <header>
         <h1>Ondo State climate data by LGA</h1>
-        <p>Monthly rainfall, temperature and humidity. Choose LGAs and dates, then download to Excel.</p>
+        <p>Monthly rainfall, temperature, humidity, radiation, wind and soil moisture (CHIRPS, NASA POWER and ERA5, 1996 to date). Choose LGAs and dates, then download to Excel.</p>
       </header>
       {error && <div className="err">{error}</div>}
       {meta && (

@@ -25,9 +25,15 @@ import db
 import security
 
 VARS = {"rain_mm": "Rainfall (mm/month)", "t2m": "Mean temperature (°C)",
-        "t2m_max": "Max temperature (°C)", "rh2m": "Relative humidity (%)"}
+        "t2m_max": "Max temperature (°C)", "rh2m": "Relative humidity (%)",
+        "era5_t2m": "ERA5 temperature (°C)", "era5_dewpoint": "ERA5 dew point (°C)",
+        "era5_rain_mm": "ERA5 rainfall (mm/month)", "era5_rh2m": "ERA5 relative humidity (%)",
+        "era5_radiation": "ERA5 solar radiation (W/m²)", "era5_wind": "ERA5 wind speed (m/s)",
+        "era5_pressure": "ERA5 surface pressure (hPa)", "era5_soil": "ERA5 soil moisture (m³/m³)"}
 SOURCES = [("rain_mm", "CHIRPS v2.0 (UCSB Climate Hazards Center), mean of 0.05° cells per LGA"),
            ("t2m, t2m_max, rh2m", "NASA POWER monthly, point at LGA centroid (~0.5° resolution, modelled)"),
+           ("era5_* columns", "ERA5-Land monthly means (ECMWF / Copernicus C3S), ~9 km grid, 1996 to date, mean of grid cells "
+                             "inside each LGA. Modelled reanalysis; ERA5 humidity is derived from mean temperature and dew point."),
            ("Note", "Modelled/satellite estimates, not station measurements. Validate against NiMet data where possible.")]
 PERIOD = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 DUMMY_HASH = generate_password_hash("not-a-real-password")  # keeps login timing equal for unknown emails

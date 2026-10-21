@@ -4,6 +4,8 @@ from sqlalchemy import Boolean, Column, DateTime, Float, Integer, MetaData, Stri
 from sqlalchemy.dialects import postgresql, sqlite
 
 meta = MetaData()
+ERA5_COLUMNS = ["era5_t2m", "era5_dewpoint", "era5_rain_mm", "era5_rh2m", "era5_radiation", "era5_wind",
+                "era5_pressure", "era5_soil"]
 users = Table("users", meta,
               Column("id", Integer, primary_key=True),
               Column("email", String(254), unique=True, nullable=False),
@@ -23,7 +25,9 @@ climate = Table("climate_lga_month", meta,
                 Column("lga", String(100), primary_key=True),
                 Column("year", Integer, primary_key=True),
                 Column("month", Integer, primary_key=True),
-                Column("rain_mm", Float), Column("t2m", Float), Column("t2m_max", Float), Column("rh2m", Float))
+                Column("rain_mm", Float), Column("t2m", Float), Column("t2m_max", Float), Column("rh2m", Float),
+                # ERA5-Land (Copernicus), 1996 to date; filled by era5.py
+                *[Column(c, Float) for c in ERA5_COLUMNS])
 
 
 def get_engine(url=None):
@@ -42,6 +46,8 @@ def init_db(engine):
         with engine.begin() as c:  # upgrade a database created before two-factor login existed
             c.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255)"))
             c.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false"))
+            for col in ERA5_COLUMNS:  # upgrade a database created before the ERA5 columns existed
+                c.execute(text(f"ALTER TABLE climate_lga_month ADD COLUMN IF NOT EXISTS {col} DOUBLE PRECISION"))  # noqa: S608
             for name in meta.tables:
                 c.execute(text(f'ALTER TABLE "{name}" ENABLE ROW LEVEL SECURITY'))  # noqa: S608
 
