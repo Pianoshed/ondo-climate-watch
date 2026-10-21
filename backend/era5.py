@@ -162,6 +162,7 @@ def run(engine, start_year, csv=None, save=True):
     if csv:
         pd.DataFrame(rows).to_csv(csv, index=False)
     if save:
+        print(f"Saving {len(rows)} rows to the database ...")
         with engine.begin() as c:
             db.upsert(c, db.climate, rows, KEYS)
     print(f"ERA5: {len(rows)} LGA-months {'saved' if save else 'processed'}")

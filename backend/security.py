@@ -52,20 +52,62 @@ def verify_totp(secret, code):
     return bool(code) and pyotp.TOTP(secret).verify(code.strip(), valid_window=1)
 
 
-def send_reset_email(to, link):
-    host = os.environ.get("SMTP_HOST")
-    if not host:
-        if os.environ.get("APP_ENV") != "production":
-            logging.getLogger(__name__).warning("Dev only, no SMTP set. Reset link for %s: %s", to, link)
+def _mail_from():
+    return os.environ.get("MAIL_FROM") or os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER", "")
+
+
+def _body(link):
+    return (f"Use this link within {RESET_MINUTES} minutes to set a new password:\n{link}\n\n"
+            "If you did not ask for this, ignore this email.")
+
+
+def _send_brevo(to, link):
+    """Sends over HTTPS (port 443). Render's free plan blocks SMTP ports, but not this."""
+    import requests
+
+    log = logging.getLogger(__name__)
+    sender = _mail_from()
+    if not sender:
+        log.error("BREVO_API_KEY is set but MAIL_FROM is not. Set MAIL_FROM to your verified Brevo sender address.")
         return False
+    r = requests.post("https://api.brevo.com/v3/smtp/email", timeout=15,
+                      headers={"api-key": os.environ["BREVO_API_KEY"], "accept": "application/json"},
+                      json={"sender": {"name": "Ondo Climate Watch", "email": sender}, "to": [{"email": to}],
+                            "subject": "Reset your password", "textContent": _body(link)})
+    if r.status_code >= 300:
+        log.error("Brevo refused the reset email (HTTP %s): %s", r.status_code, r.text[:300])
+        return False
+    return True
+
+
+def _send_smtp(to, link):
     msg = EmailMessage()
     msg["Subject"], msg["To"] = "Reset your password", to
-    msg["From"] = os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER", "")
-    msg.set_content(f"Use this link within {RESET_MINUTES} minutes to set a new password:\n{link}\n\n"
-                    "If you did not ask for this, ignore this email.")
-    with smtplib.SMTP(host, int(os.environ.get("SMTP_PORT", "587")), timeout=15) as s:
+    msg["From"] = _mail_from()
+    msg.set_content(_body(link))
+    with smtplib.SMTP(os.environ["SMTP_HOST"], int(os.environ.get("SMTP_PORT", "587")), timeout=15) as s:
         s.starttls()
         if os.environ.get("SMTP_USER"):
             s.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
         s.send_message(msg)
     return True
+
+
+def send_reset_email(to, link):
+    """Email the reset link. The link is never written to the logs, unless you are NOT in production and have
+    explicitly set DEV_LOG_RESET_LINK=1 on your own computer. Use `python manage.py reset-link EMAIL` instead."""
+    log = logging.getLogger(__name__)
+    try:
+        if os.environ.get("BREVO_API_KEY"):
+            return _send_brevo(to, link)
+        if os.environ.get("SMTP_HOST"):
+            return _send_smtp(to, link)
+    except Exception as e:  # noqa: BLE001 - never let a mail failure leak details or change the page's answer
+        log.error("Could not send the reset email (%s). Check the email settings.", type(e).__name__)
+        return False
+    if os.environ.get("APP_ENV") != "production" and os.environ.get("DEV_LOG_RESET_LINK") == "1":
+        log.warning("Dev only, no email service set. Reset link for %s: %s", to, link)
+    else:
+        log.warning("No email service is set up, so no reset email was sent. "
+                    "Use: python manage.py reset-link EMAIL, or set BREVO_API_KEY and MAIL_FROM.")
+    return False

@@ -21,6 +21,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import analysis
 import db
 import security
 
@@ -34,6 +35,8 @@ SOURCES = [("rain_mm", "CHIRPS v2.0 (UCSB Climate Hazards Center), mean of 0.05Â
            ("t2m, t2m_max, rh2m", "NASA POWER monthly, point at LGA centroid (~0.5Â° resolution, modelled)"),
            ("era5_* columns", "ERA5-Land monthly means (ECMWF / Copernicus C3S), ~9 km grid, 1996 to date, mean of grid cells "
                              "inside each LGA. Modelled reanalysis; ERA5 humidity is derived from mean temperature and dew point."),
+           ("Survey indicators", "DHS (state level from the DHS API; LGA level from NDHS clusters), Malaria Atlas Project and "
+                                 "IHME rasters (LGA zonal means). See the note column for sample size and caveats."),
            ("Note", "Modelled/satellite estimates, not station measurements. Validate against NiMet data where possible.")]
 PERIOD = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 DUMMY_HASH = generate_password_hash("not-a-real-password")  # keeps login timing equal for unknown emails
@@ -114,10 +117,10 @@ def create_app(engine=None):
             return fn(*a, **kw)
         return wrapper
 
-    def fetch(by_lga=True):
+    def fetch(by_lga=True, start=None, end=None):
         """Validated, parameterised query. Every user input is allow-listed or pattern-checked, then bound."""
         names = request.args.getlist("lga")
-        start, end = request.args.get("start"), request.args.get("end")
+        start, end = start or request.args.get("start"), end or request.args.get("end")
         for p in (start, end):
             if p and not PERIOD.match(p):
                 abort(400, "Dates must look like 2024-03")
@@ -275,6 +278,133 @@ def create_app(engine=None):
                           "properties": {"lga": r.name, "value": None if val is None or pd.isna(val) else val}})
         return jsonify(type="FeatureCollection", features=feats)
 
+    def variables_arg(default=None, minimum=1):
+        vs = list(dict.fromkeys(request.args.getlist("variable"))) or list(default or [])
+        if len(vs) > 12 or len(vs) < minimum or any(v not in VARS for v in vs):
+            abort(400, "Choose between %d and 12 known indicators" % minimum)
+        return vs
+
+    def choice(name, allowed, default):
+        v = request.args.get(name, default)
+        if v not in allowed:
+            abort(400, f"Unknown {name}")
+        return v
+
+    def window(cols):
+        """Monthly series for the chosen scope ('state' = mean of the selected LGAs, or one LGA), start/end honoured.
+        Indicators with no data in the window are dropped so the matrix stays readable."""
+        df = fetch(by_lga=False)
+        scope = request.args.get("scope", "state")
+        if scope != "state" and scope not in set(df["lga"]):
+            abort(400, "Unknown scope")
+        have = [c for c in cols if df[c].notna().any()]
+        return analysis.wide(df, have, scope, request.args.getlist("lga") or None), have
+
+    @app.get("/api/correlations")  # indicators against each other over time, optionally with a lag
+    @login_required
+    def correlations():
+        cols = variables_arg(["rain_mm", "t2m", "t2m_max", "rh2m"], 2)
+        method = choice("method", ("pearson", "spearman"), "pearson")
+        deseason = request.args.get("deseasonalise", "1") != "0"
+        w, have = window(cols)
+        if len(have) < 2 or len(w) < analysis.MIN_PAIRS:
+            return jsonify(variables=have, matrix=[], lag=[], months=len(w))
+        base = analysis.deseasonalise(w, have) if deseason else w
+        out = {"variables": have, "labels": {c: VARS[c] for c in have}, "months": len(w), "method": method,
+               "deseasonalised": deseason, "start": w.index.min().strftime("%Y-%m"), "end": w.index.max().strftime("%Y-%m"),
+               "matrix": analysis.matrix(base, have, method), "lag": []}
+        la, lb = request.args.get("lag_a"), request.args.get("lag_b")
+        if la in have and lb in have:
+            try:
+                ml = max(1, min(24, int(request.args.get("max_lag", 12))))
+            except ValueError:
+                abort(400, "max_lag must be a number")
+            out["lag"] = analysis.lagged(base, la, lb, ml, method)
+            out["lag_pair"] = [la, lb]
+        return jsonify(out)
+
+    @app.get("/api/trends")  # yearly trend for each indicator (complete years only)
+    @login_required
+    def trends():
+        w, have = window(variables_arg(list(VARS)))
+        return jsonify(variables=have, labels={c: VARS[c] for c in have}, trends=analysis.trends(w, have) if len(w) else {})
+
+    def survey_frame(level=None):
+        """Survey rows for ?indicator=&source=&year=&geo_level=, validated against what is in the database."""
+        indicator, source = request.args.get("indicator", ""), request.args.get("source")
+        geo = level or request.args.get("geo_level")
+        s = db.surveys.c
+        with engine.connect() as c:
+            if not c.execute(select(s.indicator).where(s.indicator == indicator).limit(1)).first():
+                abort(400, "Unknown indicator")
+            q = select(db.surveys).where(s.indicator == indicator).order_by(s.survey_year, s.geo_name)
+            if source:
+                q = q.where(s.source == source)
+            if geo:
+                q = q.where(s.geo_level == geo)
+            if request.args.get("year"):
+                try:
+                    q = q.where(s.survey_year == int(request.args["year"]))
+                except ValueError:
+                    abort(400, "year must be a number")
+            df = pd.read_sql(q, c)
+        if not source and df["source"].nunique() > 1:
+            abort(400, "Several sources have this indicator; add ?source=")
+        return df
+
+    @app.get("/api/surveys/meta")
+    @login_required
+    def surveys_meta():
+        s = db.surveys.c
+        with engine.connect() as c:
+            df = pd.read_sql(select(s.source, s.indicator, s.label, s.unit, s.survey_year, s.geo_level).distinct(), c)
+        out = [{"source": src, "indicator": ind, "label": g["label"].iloc[0], "unit": g["unit"].iloc[0] or "",
+                "years": sorted(int(y) for y in g["survey_year"].unique()), "geo_levels": sorted(g["geo_level"].unique())}
+               for (src, ind), g in df.groupby(["source", "indicator"])]
+        return jsonify(out)
+
+    @app.get("/api/surveys")
+    @login_required
+    def surveys_data():
+        return jsonify(nulls(survey_frame()).to_dict("records"))
+
+    @app.get("/api/surveys/boundaries")  # GeoJSON with the LGA-level survey value attached, for the map
+    @login_required
+    def surveys_boundaries():
+        df = survey_frame("lga")
+        if df["survey_year"].nunique() > 1:
+            df = df[df["survey_year"] == df["survey_year"].max()]  # latest round unless ?year= is given
+        vals = df.set_index("geo_name")
+        with engine.connect() as c:
+            rows = c.execute(select(db.lgas)).all()
+        feats = []
+        for r in rows:
+            row = vals.loc[r.name] if r.name in vals.index else None
+            v = None if row is None or pd.isna(row["value"]) else float(row["value"])
+            feats.append({"type": "Feature", "geometry": json.loads(r.geojson),
+                          "properties": {"lga": r.name, "value": v, "note": None if row is None else row["note"],
+                                         "n": None if row is None or pd.isna(row["n"]) else int(row["n"])}})
+        return jsonify(type="FeatureCollection", features=feats)
+
+    @app.get("/api/correlations/survey")  # across LGAs: survey value vs average climate over a window
+    @login_required
+    def survey_correlations():
+        sv = survey_frame("lga")
+        if sv.empty:
+            return jsonify(results=[], n_lgas=0)
+        year = int(sv["survey_year"].max() if not request.args.get("year") else request.args["year"])
+        sv = sv[sv["survey_year"] == year].set_index("geo_name")["value"]
+        start, end = request.args.get("start") or f"{year}-01", request.args.get("end") or f"{year}-12"
+        method = choice("method", ("pearson", "spearman"), "pearson")
+        cols = variables_arg(["rain_mm", "t2m", "t2m_max", "rh2m"])
+        df = fetch(by_lga=False, start=start, end=end)
+        means = df.groupby("lga")[cols].mean()
+        res = [{"variable": c, "label": VARS[c], **analysis.cross_section(means[c], sv, method)}
+               for c in cols if means[c].notna().any()]
+        return jsonify(results=res, year=year, start=start, end=end, method=method, n_lgas=int(sv.notna().sum()),
+                       note="Ecological comparison across LGAs: it shows where the two patterns coincide, "
+                            "not that one causes the other.")
+
     @app.get("/api/export.xlsx")
     @login_required
     def export():
@@ -287,6 +417,12 @@ def create_app(engine=None):
             for v, label in VARS.items():  # one LGA x month grid per indicator, ready for mapping/modelling
                 grid = df.pivot(index="lga", columns="period", values=v)
                 grid.to_excel(xw, sheet_name=label[:28].replace("/", "-"), index_label="LGA")
+            with engine.connect() as c:
+                sv = pd.read_sql(select(db.surveys), c)
+            if len(sv):
+                for col in ("geo_name", "label", "note"):
+                    sv[col] = sv[col].map(safe_cell)
+                sv.rename(columns={"survey_year": "year"}).to_excel(xw, sheet_name="Survey indicators", index=False)
             pd.DataFrame(SOURCES, columns=["Item", "Source / note"]).to_excel(xw, sheet_name="About", index=False)
             for ws in xw.book.worksheets:
                 for cell in ws[1]:

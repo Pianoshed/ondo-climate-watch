@@ -28,6 +28,19 @@ climate = Table("climate_lga_month", meta,
                 Column("rain_mm", Float), Column("t2m", Float), Column("t2m_max", Float), Column("rh2m", Float),
                 # ERA5-Land (Copernicus), 1996 to date; filled by era5.py
                 *[Column(c, Float) for c in ERA5_COLUMNS])
+# Survey and modelled health indicators (DHS, Malaria Atlas Project, IHME rasters). One row per
+# source x indicator x survey year x area. geo_level is "state" (survey estimate for Ondo as a whole) or "lga".
+surveys = Table("survey_indicator", meta,
+                Column("source", String(40), primary_key=True),
+                Column("indicator", String(80), primary_key=True),
+                Column("survey_year", Integer, primary_key=True),
+                Column("geo_level", String(10), primary_key=True),
+                Column("geo_name", String(100), primary_key=True),
+                Column("label", String(200)), Column("unit", String(40)),
+                Column("value", Float), Column("ci_low", Float), Column("ci_high", Float),
+                Column("n", Integer), Column("n_clusters", Integer),
+                Column("note", String(300)))
+SURVEY_KEYS = ["source", "indicator", "survey_year", "geo_level", "geo_name"]
 
 
 def get_engine(url=None):
@@ -52,10 +65,15 @@ def init_db(engine):
                 c.execute(text(f'ALTER TABLE "{name}" ENABLE ROW LEVEL SECURITY'))  # noqa: S608
 
 
-def upsert(conn, table, rows, keys):
-    """Insert or update rows (list of dicts) on the key columns. Only the columns present in rows are updated."""
+def upsert(conn, table, rows, keys, chunk=500):
+    """Insert or update rows (list of dicts) on the key columns. Only the columns present in rows are updated.
+    Rows go to the database in multi-row statements of `chunk` rows: one network round trip per chunk instead of one
+    per row, which is what makes a 6,000-row load to a remote Postgres take seconds rather than many minutes."""
     if not rows:
         return
     ins = (postgresql if conn.dialect.name == "postgresql" else sqlite).insert(table)
-    cols = [c for c in rows[0] if c not in keys]
-    conn.execute(ins.on_conflict_do_update(index_elements=keys, set_={c: ins.excluded[c] for c in cols}), rows)
+    first = list(rows[0])
+    cols = [c for c in first if c not in keys]
+    for i in range(0, len(rows), chunk):
+        stmt = ins.values([{k: r.get(k) for k in first} for r in rows[i:i + chunk]])
+        conn.execute(stmt.on_conflict_do_update(index_elements=keys, set_={c: stmt.excluded[c] for c in cols}))

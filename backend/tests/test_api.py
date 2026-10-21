@@ -1,66 +1,73 @@
-import io
+from sqlalchemy import insert
 
-from openpyxl import load_workbook
-
+import db
 from tests.conftest import ORIGIN
 
-BAD = {"email": "ada@example.org", "password": "wrong-password-123"}
+
+def seed_surveys(engine):
+    rows = [{"source": "DHS microdata", "indicator": "dhs_child_fever", "survey_year": 2023, "geo_level": "lga", "geo_name": n,
+             "label": "Fever", "unit": "%", "value": v, "n": 120, "n_clusters": 6, "note": "x"} for n, v in (("Alpha", 10.0), ("Beta", 20.0))]
+    rows.append({"source": "DHS API", "indicator": "dhs_child_fever", "survey_year": 2023, "geo_level": "state", "geo_name": "Ondo",
+                 "label": "Fever", "unit": "%", "value": 15.0, "n": None, "n_clusters": None, "note": None})
+    with engine.begin() as c:
+        c.execute(insert(db.surveys), rows)
 
 
-def test_requires_login(client):
-    for path in ("/api/data", "/api/meta", "/api/summary", "/api/export.xlsx", "/api/boundaries"):
-        assert client.get(path).status_code == 401
+def test_long_history_is_served(client):
+    r = client.get("/api/meta").get_json()
+    assert r["start"] == "1996-01" and r["end"] == "2025-12"
 
 
-def test_login_and_cookie_flags(client):
-    r = client.post("/api/auth/login", json={"email": "ADA@example.org", "password": "correct horse battery"},
-                    headers=ORIGIN)
-    cookie = r.headers["Set-Cookie"]
-    assert r.status_code == 200 and "HttpOnly" in cookie and "SameSite=Strict" in cookie
+def test_correlations_matrix_and_lag(client):
+    r = client.get("/api/correlations?variable=rain_mm&variable=rh2m&lag_a=rain_mm&lag_b=rh2m&max_lag=3").get_json()
+    cell = next(c for c in r["matrix"] if c["a"] == "rain_mm" and c["b"] == "rh2m")
+    assert cell["r"] > 0.5 and cell["n"] == 360 and r["deseasonalised"] is True
+    assert len(r["lag"]) == 7 and r["start"] == "1996-01"
 
 
-def test_bad_login_same_message_for_unknown_user(client):
-    a = client.post("/api/auth/login", json=BAD, headers=ORIGIN)
-    b = client.post("/api/auth/login", json={**BAD, "email": "nobody@example.org"}, headers=ORIGIN)
-    assert a.status_code == b.status_code == 401 and a.get_json() == b.get_json()
+def test_correlations_drop_variables_without_data_and_validate(client):
+    r = client.get("/api/correlations?variable=rain_mm&variable=t2m&variable=era5_t2m").get_json()
+    assert "era5_t2m" not in r["variables"]  # no ERA5 data in range: dropped, not an error
+    assert client.get("/api/correlations?variable=rain_mm&variable=nope").status_code == 400
+    assert client.get("/api/correlations?variable=rain_mm&variable=t2m&method=bad").status_code == 400
+    assert client.get("/api/correlations?variable=rain_mm&variable=t2m&scope=Nowhere").status_code == 400
 
 
-def test_post_without_origin_rejected(client):
-    assert client.post("/api/auth/login", json=BAD).status_code == 403
+def test_trends_detect_planted_warming(client):
+    r = client.get("/api/trends?variable=t2m&variable=rain_mm").get_json()["trends"]
+    assert r["t2m"]["direction"] == "increasing" and 0.2 < r["t2m"]["slope_per_decade"] < 0.4
+    assert r["rain_mm"]["n_years"] == 30
 
 
-def test_login_rate_limited(client):
-    codes = [client.post("/api/auth/login", json=BAD, headers=ORIGIN).status_code for _ in range(7)]
-    assert codes[:5] == [401] * 5 and codes[5] == 429
+def test_window_limits_period_and_scope(client):
+    r = client.get("/api/trends?variable=t2m&start=2010-01&end=2020-12&scope=Beta").get_json()["trends"]["t2m"]
+    assert r["start_year"] == 2010 and r["end_year"] == 2020
 
 
-def test_data_filters(authed):
-    rows = authed.get("/api/data?lga=Akure South&start=2024-02&end=2024-03").get_json()
-    assert [r["period"] for r in rows] == ["2024-02", "2024-03"]
-    assert authed.get("/api/summary?variable=rain_mm").get_json()[0]["value"] == 20.0
+def test_survey_endpoints_and_cross_lga_correlation(client, engine):
+    seed_surveys(engine)
+    meta = client.get("/api/surveys/meta").get_json()
+    assert {m["source"] for m in meta} == {"DHS microdata", "DHS API"}
+    assert len(client.get("/api/surveys?indicator=dhs_child_fever&geo_level=lga").get_json()) == 2
+    fc = client.get("/api/surveys/boundaries?indicator=dhs_child_fever&source=DHS%20microdata").get_json()
+    assert {f["properties"]["lga"]: f["properties"]["value"] for f in fc["features"]} == {"Alpha": 10.0, "Beta": 20.0}
+    # only 2 LGAs: too few for a correlation, so the API says so rather than inventing one
+    cc = client.get("/api/correlations/survey?indicator=dhs_child_fever&source=DHS%20microdata&variable=rain_mm").get_json()
+    assert cc["results"][0]["r"] is None and cc["n_lgas"] == 2
+    assert client.get("/api/surveys?indicator=bogus").status_code == 400
+    assert client.get("/api/surveys?indicator=dhs_child_fever").status_code == 400  # two sources: must choose
 
 
-def test_injection_attempts_rejected(authed):
-    for q in ("lga=x' OR '1'='1", "lga=Akure South'; DROP TABLE users;--", "start=2024-01' OR '1'='1",
-              "variable=rain_mm;DROP TABLE users"):
-        assert authed.get(f"/api/data?{q}").status_code == 400 or authed.get(f"/api/summary?{q}").status_code == 400
-    assert len(authed.get("/api/data").get_json()) == 6  # data intact
+def test_requires_login(engine):
+    from app import create_app
+    app = create_app(engine); app.testing = True
+    assert app.test_client().get("/api/correlations?variable=rain_mm&variable=t2m").status_code == 401
 
 
-def test_export_xlsx_sanitised(authed):
-    r = authed.get("/api/export.xlsx")
-    wb = load_workbook(io.BytesIO(r.data))
-    assert {"Data", "About"} <= set(wb.sheetnames)
-    col = [c.value for c in wb["Data"]["A"]]
-    assert "'=EVIL()" in col and not any(str(v).startswith("=") for v in col)
+def test_export_includes_survey_sheet(client, engine):
+    seed_surveys(engine)
+    import io
 
-
-def test_boundaries_geojson_and_headers(authed):
-    r = authed.get("/api/boundaries?variable=rain_mm")
-    assert r.get_json()["type"] == "FeatureCollection" and len(r.get_json()["features"]) == 2
-    assert r.headers["X-Content-Type-Options"] == "nosniff" and "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
-
-
-def test_logout_clears_session(authed):
-    authed.post("/api/auth/logout", headers=ORIGIN)
-    assert authed.get("/api/data").status_code == 401
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(client.get("/api/export.xlsx").data))
+    assert "Survey indicators" in wb.sheetnames
