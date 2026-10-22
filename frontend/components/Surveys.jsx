@@ -6,6 +6,13 @@ import { fmt, isNum, linreg } from "../lib/analytics";
 import { mapPaths } from "../lib/geo";
 
 const CLIMATE = ["rain_mm", "t2m", "t2m_max", "rh2m"];
+const ORIGIN_SEP = " | Origin: ";
+const PUBLISHERS = {
+  "DHS API": ["The DHS Program", "https://api.dhsprogram.com/"],
+  "DHS microdata": ["The DHS Program (NDHS microdata)", "https://dhsprogram.com/data/"],
+  MAP: ["Malaria Atlas Project", "https://data.malariaatlas.org"],
+  "IHME LBD": ["IHME Local Burden of Disease", "https://ghdx.healthdata.org"],
+};
 const key = i => `${i.source}|${i.indicator}`;
 
 export default function Surveys({ onLogout }) {
@@ -51,7 +58,8 @@ export default function Surveys({ onLogout }) {
   const view = useMemo(() => mapPaths(fc), [fc]);
   const chosen = corr?.results.find(r => r.variable === cv);
   const fit = chosen?.points.length ? linreg(chosen.points.map(p => p.x), chosen.points.map(p => p.y)) : null;
-  const unit = item?.unit || "";
+  const u = item?.unit || "";
+  const unit = u === "%" ? "%" : u ? ` ${u}` : ""; // "%" sticks to the number, words like "per 1,000" get a space
   const lowCount = lga.filter(r => (r.note || "").startsWith("Indicative")).length;
 
   if (items && !items.length) {
@@ -60,9 +68,8 @@ export default function Surveys({ onLogout }) {
         <header><h1>Survey and modelled health indicators</h1></header>
         <main><div className="panel">
           <p>No survey data loaded yet. From the backend folder run one or more of:</p>
-          <pre>{`python surveys.py dhs-api
-python surveys.py dhs-microdata --kr NGKR8CFL.DTA --ge NGGE8AFL.shp --year 2023
-python surveys.py rasters data/surveys/map --source "MAP"`}</pre>
+          <pre>{`python surveys.py all`}</pre>
+          <p>This loads the DHS API and Malaria Atlas Project data automatically, and the NDHS cluster data if NGKR*.DTA and NGGE*.shp are in data/surveys/.</p>
         </div></main>
       </>
     );
@@ -93,8 +100,25 @@ python surveys.py rasters data/surveys/map --source "MAP"`}</pre>
                 <em>{isNum(s.ci_low) ? `95% CI ${fmt(s.ci_low)} to ${fmt(s.ci_high)}` : "survey estimate"}{isNum(s.n) ? `, n=${s.n}` : ""}</em>
               </div>
             ))}
+            <p className="note">Source: {item.source}{item.source === "MAP" ? ". Modelled surface from the Malaria Atlas Project (CC BY 3.0), not a survey." : ""}</p>
             {view && <p className="note">Map: low {fmt(view.lo)} to high {fmt(view.hi)} {unit}</p>}
             <p><strong>{hover ? `${hover.lga}: ${isNum(hover.value) ? fmt(hover.value) + unit : "no data"}${hover.n ? ` (n=${hover.n})` : ""}` : "Hover over an LGA"}</strong></p>
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Origin of this data</summary>
+              <p className="note" style={{ margin: "6px 0" }}>
+                Publisher: {PUBLISHERS[item.source]?.[0] ?? "user-supplied data"}
+                {PUBLISHERS[item.source] && <> (<a href={PUBLISHERS[item.source][1]} target="_blank" rel="noreferrer">website</a>)</>}
+              </p>
+              <p className="note" style={{ margin: "6px 0", wordBreak: "break-word" }}>{(rows[0]?.note || "").split(ORIGIN_SEP)[1] || "No origin recorded. Reload this data with the latest surveys.py to add it."}</p>
+            </details>
+            <label>Download data</label>
+            <p style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "4px 0" }}>
+              <a className="btn" href={`/api/surveys/export.csv?${new URLSearchParams({ indicator: item.indicator, source: item.source })}`}>This indicator, CSV</a>
+              <a className="btn" href={`/api/surveys/export.xlsx?${new URLSearchParams({ indicator: item.indicator, source: item.source })}`}>This indicator, Excel</a>
+              <a className="btn" href="/api/surveys/export.csv">All indicators, CSV</a>
+              <a className="btn" href="/api/surveys/export.xlsx">All indicators, Excel</a>
+            </p>
+            <Help item={item} unit={unit} method={method} chosen={chosen} corr={corr} vars={vars} cv={cv} lowCount={lowCount} nLga={lga.length} />
           </aside>
           <div className="col">
             {lga.length === 0 ? (
@@ -175,7 +199,7 @@ python surveys.py rasters data/surveys/map --source "MAP"`}</pre>
                       <thead><tr><th>LGA</th><th>Value</th><th>Children / cells (n)</th><th>Clusters</th><th>Note</th></tr></thead>
                       <tbody>
                         {lga.map(r => (
-                          <tr key={r.geo_name}><td>{r.geo_name}</td><td>{fmt(r.value)}{unit}</td><td>{r.n ?? ""}</td><td>{r.n_clusters ?? ""}</td><td>{r.note}</td></tr>
+                          <tr key={r.geo_name}><td>{r.geo_name}</td><td>{fmt(r.value)}{unit}</td><td>{r.n ?? ""}</td><td>{r.n_clusters ?? ""}</td><td>{(r.note || "").split(ORIGIN_SEP)[0]}</td></tr>
                         ))}
                       </tbody>
                     </table>
@@ -187,5 +211,62 @@ python surveys.py rasters data/surveys/map --source "MAP"`}</pre>
         </main>
       )}
     </>
+  );
+}
+
+const pNum = p => (typeof p === "string" ? (p.trim().startsWith("<") ? 0.0005 : parseFloat(p)) : Number(p));
+const strength = r => (Math.abs(r) < 0.3 ? "weak" : Math.abs(r) < 0.6 ? "moderate" : "strong");
+
+function Help({ item, unit, method, chosen, corr, vars, cv, lowCount, nLga }) {
+  const r = chosen && isNum(chosen.r) ? chosen.r : null;
+  const p = chosen ? pNum(chosen.p) : NaN;
+  const sig = Number.isFinite(p) && p < 0.05;
+  const climate = (vars[cv] ?? chosen?.label ?? "climate").toLowerCase();
+  const small = { fontSize: 13, margin: "6px 0", lineHeight: 1.45 };
+  const flags = [];
+  if (item?.source === "MAP") flags.push("These values are computer model estimates, and the models already use rainfall and temperature. A link with climate here can be partly built in, so do not treat it as independent proof.");
+  if (lowCount > 0) flags.push(`${lowCount} of ${nLga} LGAs rest on very few children or survey clusters. Their values can swing a lot.`);
+  if (corr && corr.n_lgas < 12) flags.push(`Only ${corr.n_lgas} LGAs have data, so one unusual LGA can change the result.`);
+  if (r !== null && !sig) flags.push("The p value is not below 0.05, so this pattern could easily be chance.");
+  if (r !== null && Math.abs(r) >= 0.6 && corr && corr.n_lgas < 12) flags.push("A strong r from a small number of LGAs is often driven by one or two points. Check the scatter plot.");
+  flags.push("Four climate indicators are tested at once. Out of several tests, one can look significant by luck alone.");
+  flags.push("It is a comparison between LGAs. It does not show that climate causes the health outcome.");
+  return (
+    <details open style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+      <summary style={{ fontWeight: 600, cursor: "pointer" }}>How to read this page</summary>
+
+      <p style={small}><strong>What a correlation tells you.</strong> It checks whether LGAs with more of one thing also tend to have more (or less) of another. It describes a pattern, nothing more.</p>
+      <p style={small}><strong>r</strong> runs from -1 to +1. Near 0 means no clear pattern. Below 0.3 is weak, 0.3 to 0.6 moderate, above 0.6 strong. A minus sign means one goes up as the other goes down.</p>
+      <p style={small}><strong>p</strong> is the chance of seeing a pattern this strong by luck alone. Below 0.05 means unlikely to be luck. With few LGAs, only a big r can reach that.</p>
+      <p style={small}><strong>Pearson or Spearman?</strong> Pearson looks for a straight-line pattern. Spearman compares rankings and copes better with unusual values.</p>
+
+      {r !== null && (
+        <div style={{ background: "var(--bg, #f4f7f9)", border: "1px solid var(--line)", borderRadius: 6, padding: 8, margin: "8px 0" }}>
+          <strong style={{ fontSize: 13 }}>Your current result</strong>
+          <p style={small}>
+            {Math.abs(r) < 0.1
+              ? `Across ${corr.n_lgas} LGAs there is almost no link between ${climate} and ${item.label.toLowerCase()}.`
+              : `Across ${corr.n_lgas} LGAs, those with ${r > 0 ? "higher" : "lower"} ${climate} tend to have ${r > 0 ? "higher" : "lower"} values here. The link is ${strength(r)} (r = ${r.toFixed(2)}).`}
+            {" "}{sig ? "It is unlikely to be chance, but that still does not prove cause." : "It is not strong enough to rule out chance."}
+          </p>
+        </div>
+      )}
+
+      <p style={{ ...small, fontWeight: 600 }}>Do</p>
+      <ul style={{ ...small, paddingLeft: 18 }}>
+        <li>Use the state figure for headline numbers.</li>
+        <li>Use LGA values and correlations to decide where to look closer.</li>
+        <li>Look at the scatter plot, not only r and p.</li>
+        <li>Check n and the Note column before quoting an LGA.</li>
+        <li>Name the source and say if it is a survey or a model.</li>
+      </ul>
+
+      <p style={{ ...small, fontWeight: 600 }}>Watch out for</p>
+      <ul style={{ ...small, paddingLeft: 18 }}>
+        {flags.map(f => <li key={f}>{f}</li>)}
+        {item?.source === "DHS microdata" && <li>Survey GPS points are deliberately shifted by up to 2 km (urban) or 5 km (rural), so a cluster can land in the wrong neighbouring LGA.</li>}
+        <li>Climate is averaged over the window shown, while the survey asks about the past 2 weeks. The timing only roughly matches.</li>
+      </ul>
+    </details>
   );
 }
