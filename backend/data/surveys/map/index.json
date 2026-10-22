@@ -13,5 +13,22 @@
     "label": "Insecticide-treated net use (modelled)",
     "unit": "%",
     "scale": 100
+  },
+  "_files": {
+    "pfpr_2022.tif": {
+      "coverage": "Malaria__202608_Global_Pf_Parasite_Rate",
+      "retrieved": "2026-10-22",
+      "server": "https://data.malariaatlas.org/geoserver/ows"
+    },
+    "pf_incidence_2022.tif": {
+      "coverage": "Malaria__202608_Global_Pf_Incidence_Rate",
+      "retrieved": "2026-10-22",
+      "server": "https://data.malariaatlas.org/geoserver/ows"
+    },
+    "itn_use_2022.tif": {
+      "coverage": "Interventions__202608_Africa_Insecticide_Treated_Net_Use",
+      "retrieved": "2026-10-22",
+      "server": "https://data.malariaatlas.org/geoserver/ows"
+    }
   }
 }
