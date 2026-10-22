@@ -74,6 +74,7 @@ def upsert(conn, table, rows, keys, chunk=500):
     ins = (postgresql if conn.dialect.name == "postgresql" else sqlite).insert(table)
     first = list(rows[0])
     cols = [c for c in first if c not in keys]
+    rows = list({tuple(r[k] for k in keys): r for r in rows}.values())  # Postgres rejects repeated keys in one statement
     for i in range(0, len(rows), chunk):
         stmt = ins.values([{k: r.get(k) for k in first} for r in rows[i:i + chunk]])
         conn.execute(stmt.on_conflict_do_update(index_elements=keys, set_={c: stmt.excluded[c] for c in cols}))

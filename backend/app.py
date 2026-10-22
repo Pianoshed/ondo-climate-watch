@@ -51,6 +51,32 @@ def nulls(df):
     return df.astype(object).where(df.notna(), None)
 
 
+ORIGIN_SEP = " | Origin: "  # surveys.py writes "<caveat> | Origin: <where the number came from>" into the note column
+SURVEY_ORIGINS = {  # source -> (publisher, where to verify, licence)
+    "DHS API": ("The DHS Program", "https://api.dhsprogram.com/rest/dhs/data?countryIds=NG&indicatorIds=<Indicator ID>&breakdown=subnational",
+                "DHS Program terms of use; cite The DHS Program"),
+    "DHS microdata": ("The DHS Program (NDHS microdata, registered access)",
+                      "https://dhsprogram.com/data/ ; re-run with the files named in Origin and compare their sha256",
+                      "DHS data use agreement; the microdata itself must not be redistributed"),
+    "MAP": ("Malaria Atlas Project", "https://data.malariaatlas.org ; WCS GetCoverage for the layer named in Origin",
+            "CC BY 3.0; cite the Malaria Atlas Project"),
+    "IHME LBD": ("Institute for Health Metrics and Evaluation, Local Burden of Disease", "https://ghdx.healthdata.org",
+                 "Check IHME terms of use (typically non-commercial)"),
+}
+UNKNOWN_ORIGIN = ("User-supplied data (see Origin)", "Ask the data owner named in Origin; compare the file's sha256", "")
+
+
+def add_origin(df):
+    """Split note into caveat + origin trail and add publisher, where-to-verify and licence from the source."""
+    df = df.copy()
+    parts = df["note"].fillna("").astype(str).str.split(ORIGIN_SEP, n=1, expand=True, regex=False)
+    df["note"] = parts[0]
+    df["origin"] = parts[1].fillna("") if 1 in parts.columns else ""
+    info = df["source"].map(lambda x: SURVEY_ORIGINS.get(x, UNKNOWN_ORIGIN))
+    df["publisher"], df["verify_at"], df["licence"] = info.str[0], info.str[1], info.str[2]
+    return df
+
+
 def create_app(engine=None):
     load_dotenv()
     prod = os.environ.get("APP_ENV") == "production"
@@ -420,7 +446,8 @@ def create_app(engine=None):
             with engine.connect() as c:
                 sv = pd.read_sql(select(db.surveys), c)
             if len(sv):
-                for col in ("geo_name", "label", "note"):
+                sv = add_origin(sv)
+                for col in ("geo_name", "label", "note", "origin"):
                     sv[col] = sv[col].map(safe_cell)
                 sv.rename(columns={"survey_year": "year"}).to_excel(xw, sheet_name="Survey indicators", index=False)
             pd.DataFrame(SOURCES, columns=["Item", "Source / note"]).to_excel(xw, sheet_name="About", index=False)
@@ -434,6 +461,80 @@ def create_app(engine=None):
                     ws.column_dimensions[get_column_letter(i)].width = min(60, max(10, width))
         buf.seek(0)
         return send_file(buf, as_attachment=True, download_name="ondo_climate_lga_monthly.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    SURVEY_COLS = {"source": "Source", "indicator": "Indicator ID", "label": "Indicator", "unit": "Unit",
+                   "survey_year": "Year", "geo_level": "Level", "geo_name": "Area", "value": "Value", "ci_low": "CI low",
+                   "ci_high": "CI high", "n": "n", "n_clusters": "Clusters", "note": "Note",
+                   "origin": "Origin (where this number came from)", "publisher": "Publisher", "verify_at": "Where to verify",
+                   "licence": "Licence"}
+    SURVEY_ABOUT = [
+        ("Levels", "state = Ondo as a whole; lga = local government area."),
+        ("DHS API", "State-level survey estimates with confidence intervals (DHS Program)."),
+        ("DHS microdata", "LGA estimates from survey clusters. GPS is displaced up to 2 km urban / 5 km rural. "
+                          "Rows marked 'Indicative only' rest on few children or clusters."),
+        ("MAP", "Malaria Atlas Project modelled surfaces (CC BY 3.0). Model output, not survey data. Cite the Malaria Atlas Project."),
+        ("Own files", "Rows loaded from CSV files (for example cholera) keep the source named in that file."),
+        ("Caution", "Comparisons across LGAs describe patterns only and do not show cause."),
+        ("Origin column", "Each row names where its number came from: the API and survey id, the model layer and server, or the "
+                          "file name. 'retrieved' is the date the data was downloaded. sha256 is the first 12 characters of the "
+                          "file's checksum, so the same file can be recognised later."),
+        ("How to check a number", "DHS API rows: re-run the link in Where to verify with the Indicator ID. MAP rows: request the "
+                                  "layer named in Origin from the MAP server and compare. DHS microdata: obtain the same NGKR and "
+                                  "NGGE files from dhsprogram.com and compare sha256. Own files: ask the data owner."),
+        ("Not verified", "Rows from your own CSV files are only as reliable as the person or system that supplied them.")]
+
+    @app.get("/api/surveys/export.<fmt>")  # ?indicator=&source=&year=&geo_level= are optional; no filter = everything
+    @login_required
+    def surveys_export(fmt):
+        if fmt not in ("csv", "xlsx"):
+            abort(404)
+        s = db.surveys.c
+        q = select(db.surveys).order_by(s.source, s.indicator, s.survey_year, s.geo_level, s.geo_name)
+        for arg, col in (("indicator", s.indicator), ("source", s.source), ("geo_level", s.geo_level)):
+            if request.args.get(arg):
+                q = q.where(col == request.args[arg])
+        if request.args.get("year"):
+            try:
+                q = q.where(s.survey_year == int(request.args["year"]))
+            except ValueError:
+                abort(400, "year must be a number")
+        with engine.connect() as c:
+            df = pd.read_sql(q, c)
+        if df.empty:
+            abort(404, "No survey data matches")
+        df = add_origin(df)[list(SURVEY_COLS)]
+        for col in ("source", "indicator", "label", "unit", "geo_name", "note", "origin", "publisher", "verify_at", "licence"):
+            df[col] = df[col].map(safe_cell)
+        long = df.rename(columns=SURVEY_COLS)
+        buf = io.BytesIO()
+        if fmt == "csv":
+            buf.write(long.to_csv(index=False).encode("utf-8-sig"))  # BOM so Excel reads accents correctly
+            buf.seek(0)
+            return send_file(buf, as_attachment=True, download_name="ondo_survey_indicators.csv", mimetype="text/csv")
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            long.to_excel(xw, sheet_name="Survey indicators", index=False)
+            lga = df[(df["geo_level"] == "lga") & df["value"].notna()].copy()
+            if len(lga):  # one row per LGA, one column per indicator and year: ready to join with climate or program data
+                lga["col"] = lga["label"].fillna(lga["indicator"]).astype(str) + " [" + lga["source"].astype(str) + " " + lga["survey_year"].astype(str) + "]"
+                lga.pivot_table(index="geo_name", columns="col", values="value", aggfunc="first").rename_axis("LGA").to_excel(
+                    xw, sheet_name="LGA table")
+            prov = (df.groupby(["source", "publisher", "verify_at", "licence"], dropna=False)
+                      .agg(rows=("value", "size"), first_year=("survey_year", "min"), last_year=("survey_year", "max"),
+                           example_origin=("origin", "first")).reset_index())
+            prov.rename(columns={"source": "Source", "publisher": "Publisher", "verify_at": "Where to verify", "licence": "Licence",
+                                 "rows": "Rows", "first_year": "First year", "last_year": "Last year",
+                                 "example_origin": "Example origin detail"}).to_excel(xw, sheet_name="Provenance", index=False)
+            pd.DataFrame(SURVEY_ABOUT, columns=["Item", "Note"]).to_excel(xw, sheet_name="About", index=False)
+            for ws in xw.book.worksheets:
+                for cell in ws[1]:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="0F766E")
+                ws.freeze_panes = "A2"
+                for i, col in enumerate(ws.columns, 1):
+                    ws.column_dimensions[get_column_letter(i)].width = min(60, max(10, max(len(str(c.value or "")) for c in col) + 2))
+        buf.seek(0)
+        return send_file(buf, as_attachment=True, download_name="ondo_survey_indicators.xlsx",
                          mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     return app

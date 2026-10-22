@@ -1,0 +1,17 @@
+{
+  "pfpr": {
+    "label": "P. falciparum parasite rate, ages 2-10 (modelled)",
+    "unit": "%",
+    "scale": 100
+  },
+  "pf_incidence": {
+    "label": "P. falciparum clinical incidence per 1,000 people (modelled)",
+    "unit": "per 1,000",
+    "scale": 1000
+  },
+  "itn_use": {
+    "label": "Insecticide-treated net use (modelled)",
+    "unit": "%",
+    "scale": 100
+  }
+}
