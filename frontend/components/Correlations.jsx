@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { divColor, fmt, isNum, normalise, shortLabel, unitOf } from "../lib/analytics";
+import { corrSentence, divColor, fmt, isNum, normalise, pNum, shortLabel, unitOf } from "../lib/analytics";
+import { Interpret, Kpi } from "./Shared";
 
 const COLORS = ["#0f766e", "#b45309", "#1d4ed8", "#be123c", "#6d28d9", "#4d7c0f", "#0e7490", "#a16207", "#64748b", "#db2777"];
 const DEFAULT = ["rain_mm", "t2m", "t2m_max", "rh2m"];
@@ -83,6 +84,20 @@ export default function Correlations({ onLogout }) {
     return normalise(rows, keys);
   }, [trend, shown]);
 
+  // Each pair once, strongest first.
+  const pairs = useMemo(() => {
+    if (!corr) return [];
+    const seen = new Set();
+    return corr.matrix.filter(c => c.a !== c.b && isNum(c.r)).filter(c => {
+      const k = [c.a, c.b].sort().join("|");
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    }).sort((x, y) => Math.abs(y.r) - Math.abs(x.r));
+  }, [corr]);
+  const sigPairs = pairs.filter(c => pNum(c.p) < 0.05);
+  const tr = trend ? trend.variables.map(k => ({ k, t: trend.trends[k] })).filter(x => x.t) : [];
+  const sigTrends = tr.filter(x => pNum(x.t.p) < 0.05);
+  const areaName = scope === "state" ? "Ondo State (average of LGAs)" : scope;
   const lagData = (corr?.lag || []).map(l => ({ ...l, r: l.r ?? 0, sig: l.p != null && l.p < 0.05 }));
 
   return (
@@ -117,6 +132,18 @@ export default function Correlations({ onLogout }) {
             <p className="note">Removed compares each month with its own average, so the calendar does not inflate the result. Use Kept only to see the raw seasonal link.</p>
           </aside>
           <div className="col">
+            {corr && corr.matrix.length > 0 && (
+              <section aria-label="Key figures">
+                <h3 className="sec"><span className="badge">{areaName}</span> {corr.start} to {corr.end}</h3>
+                <div className="kpis" style={{ marginTop: 8 }}>
+                  <Kpi hl label="Months analysed" value={corr.months} sub={`${vars.length} indicators`} />
+                  <Kpi label="Strongest link" value={pairs[0] ? pairs[0].r.toFixed(2) : "–"} sub={pairs[0] ? `${shortLabel(label(pairs[0].a))} and ${shortLabel(label(pairs[0].b))}` : "no pair"} />
+                  <Kpi label="Significant pairs" value={`${sigPairs.length} of ${pairs.length}`} sub="p below 0.05" />
+                  <Kpi label="Strongest lag" value={best ? `${best.lag} mo` : "–"} sub={best ? `r = ${fmt(best.r)}` : "choose a pair"} />
+                  <Kpi label="Significant trends" value={`${sigTrends.length} of ${tr.length}`} sub="p below 0.05" />
+                </div>
+              </section>
+            )}
             <section className="panel">
               <h2>Correlation matrix</h2>
               {!corr || !corr.matrix.length ? <p>Pick at least two indicators that have data in this period.</p> : (
@@ -150,6 +177,12 @@ export default function Correlations({ onLogout }) {
               )}
             </section>
 
+            <Interpret title="Correlation matrix: what it says" items={[
+              ...pairs.slice(0, 3).map(c => corrSentence(shortLabel(label(c.a)), shortLabel(label(c.b)), c.r, pNum(c.p), c.n)),
+              pairs.length && !sigPairs.length ? "No pair is statistically clear in this period, so treat all links as unproven." : null,
+              deseason ? "The seasonal cycle is removed, so these links are about unusual months, not about the calendar." : "The seasonal cycle is kept, so strong links may simply reflect the calendar (for example, both rise in the rainy season).",
+            ]} foot="r runs from -1 to +1. Below 0.3 is weak, 0.3 to 0.6 moderate, above 0.6 strong. Correlation does not show cause." />
+
             <section className="panel">
               <h2>Does one lead the other? {corr?.lag_pair ? `${shortLabel(label(corr.lag_pair[0]))} then ${shortLabel(label(corr.lag_pair[1]))}` : ""}</h2>
               <div className="ctrl">
@@ -177,6 +210,13 @@ export default function Correlations({ onLogout }) {
                 </>
               ) : <p>Choose two selected indicators.</p>}
             </section>
+
+            {lagData.length > 0 && best && corr?.lag_pair && (
+              <Interpret title="Lag: what it says" items={[
+                `The strongest link between ${shortLabel(label(corr.lag_pair[0]))} and ${shortLabel(label(corr.lag_pair[1]))} is at a lag of ${best.lag} months (r = ${fmt(best.r)}). ${best.lag > 0 ? `${shortLabel(label(corr.lag_pair[1]))} tends to follow ${shortLabel(label(corr.lag_pair[0]))} by about ${best.lag} months.` : best.lag < 0 ? `${shortLabel(label(corr.lag_pair[0]))} tends to follow ${shortLabel(label(corr.lag_pair[1]))} by about ${-best.lag} months.` : "They move in the same month."}`,
+                best.p != null && pNum(best.p) >= 0.05 ? "That peak is not statistically clear, so do not read a delay into it." : null,
+              ]} foot="The best lag is picked from many, so it is a hint to investigate, not proof of a delay." />
+            )}
 
             <section className="panel">
               <h2>Trends (complete years only)</h2>
@@ -217,6 +257,14 @@ export default function Correlations({ onLogout }) {
                 </>
               )}
             </section>
+            {tr.length > 0 && (
+              <Interpret title="Trends: what they say" items={tr.map(({ k, t }) => {
+                const clear = pNum(t.p) < 0.05, u = unitOf(label(k));
+                return isNum(t.slope_per_decade)
+                  ? `${shortLabel(label(k))}: ${t.slope_per_decade > 0 ? "up" : "down"} about ${fmt(Math.abs(t.slope_per_decade))} ${u} per decade (${t.start_year}–${t.end_year}). ${clear ? "This trend is statistically clear." : "Not statistically clear, so treat it as no firm trend."}`
+                  : null;
+              })} foot="A short record can hide a real trend, so check the years covered." />
+            )}
           </div>
         </main>
       )}

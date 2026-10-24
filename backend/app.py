@@ -23,6 +23,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import analysis
 import db
+import hazards
 import security
 
 VARS = {"rain_mm": "Rainfall (mm/month)", "t2m": "Mean temperature (°C)",
@@ -35,6 +36,9 @@ SOURCES = [("rain_mm", "CHIRPS v2.0 (UCSB Climate Hazards Center), mean of 0.05�
            ("t2m, t2m_max, rh2m", "NASA POWER monthly, point at LGA centroid (~0.5° resolution, modelled)"),
            ("era5_* columns", "ERA5-Land monthly means (ECMWF / Copernicus C3S), ~9 km grid, 1996 to date, mean of grid cells "
                              "inside each LGA. Modelled reanalysis; ERA5 humidity is derived from mean temperature and dew point."),
+           ("Hazard indicators", "Flood, heat-wave and wind indicators from daily ERA5 reanalysis via Open-Meteo (CC BY 4.0), "
+                                 "one point per LGA centroid. Rainfall-based flood indicators, not mapped inundation; "
+                                 "~25 km grid, so local storm gusts are understated."),
            ("Survey indicators", "DHS (state level from the DHS API; LGA level from NDHS clusters), Malaria Atlas Project and "
                                  "IHME rasters (LGA zonal means). See the note column for sample size and caveats."),
            ("Note", "Modelled/satellite estimates, not station measurements. Validate against NiMet data where possible.")]
@@ -354,6 +358,26 @@ def create_app(engine=None):
     def trends():
         w, have = window(variables_arg(list(VARS)))
         return jsonify(variables=have, labels={c: VARS[c] for c in have}, trends=analysis.trends(w, have) if len(w) else {})
+
+    @app.get("/api/hazards")  # flood, heat-wave and wind indicators per LGA and year, plus seasons and wind roses
+    @login_required
+    def hazards_data():
+        out = hazards.assemble(engine)
+        if out is None:
+            abort(404, "No hazard data yet. Run: python hazards.py")
+        return jsonify(out)
+
+    @app.get("/api/hazards/export.csv")
+    @login_required
+    def hazards_export():
+        t = hazards.yearly_table(engine)
+        if t is None:
+            abort(404, "No hazard data yet. Run: python hazards.py")
+        t["lga"] = t["lga"].map(safe_cell)
+        t = t.rename(columns={"lga": "LGA", "year": "Year",
+                              **{k: f"{v[0]} ({v[1]})" for k, v in hazards.METRICS.items()}})
+        return send_file(io.BytesIO(t.to_csv(index=False).encode("utf-8-sig")), as_attachment=True,
+                         download_name="ondo_hazards_lga_year.csv", mimetype="text/csv")
 
     def survey_frame(level=None):
         """Survey rows for ?indicator=&source=&year=&geo_level=, validated against what is in the database."""

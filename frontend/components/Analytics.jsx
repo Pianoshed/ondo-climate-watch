@@ -8,7 +8,9 @@ import {
 import {
   ADDITIVE, MONTHS, RAINY, annualValues, buildWaterfall, correlationMatrix, divColor, fmt, heatMatrix, isNum, kpis, linreg,
   monthlySeries, normalise, pieByLga, pieByMonth, pieBySeason, rolling, seqColor, shortLabel, unitOf,
+  corrSentence, interpretAnnual, interpretHeat, interpretPie, interpretSeason, interpretState, interpretWaterfall, stateSummary,
 } from "../lib/analytics";
+import { Interpret } from "./Shared";
 
 const COLORS = ["#0f766e", "#b45309", "#1d4ed8", "#be123c", "#6d28d9", "#4d7c0f", "#0e7490", "#a16207", "#64748b", "#db2777"];
 const slice = i => (i < COLORS.length ? COLORS[i] : `hsl(${(i * 47) % 360} 55% 45%)`);
@@ -46,7 +48,7 @@ function Heat({ cols, rows, color, text, title, legend }) {
           <tbody>
             {rows.map(r => (
               <tr key={r.name}>
-                <td className="rl">{r.name}</td>
+                <td className="rl" style={r.state ? { fontWeight: 800, background: "#e6f4f2" } : undefined}>{r.name}</td>
                 {r.cells.map((v, i) => {
                   const bg = isNum(v) ? color(v) : "#eef2f4";
                   return <td key={i} title={`${r.name}, ${cols[i]}: ${fmt(v)}`} style={{ background: bg, color: isNum(v) && legend.dark(v) ? "#fff" : "#14202b" }}>{text(v)}</td>;
@@ -119,6 +121,9 @@ export default function Analytics({ onLogout }) {
 
   // ---- KPIs
   const kp = useMemo(() => (primary ? kpis(series, primary) : null), [series, primary]);
+  const isState = !!meta && sel.length === meta.lgas.length;
+  const areaName = isState ? "Ondo State" : `${sel.length} selected LGA${sel.length === 1 ? "" : "s"}`;
+  const sum = useMemo(() => (primary && selRows.length ? stateSummary(selRows, primary) : null), [selRows, primary]);
 
   // ---- Compare
   const cmpKeys = compare.filter(k => keys.includes(k));
@@ -196,6 +201,9 @@ export default function Analytics({ onLogout }) {
               {keys.map(k => <option key={k} value={k}>{name(k)}</option>)}
             </select>
             <p className="note">Drives the KPIs, waterfall, pie chart and heatmap.</p>
+            <label>Area</label>
+            <Seg label="Area" value={isState ? "state" : "custom"} onChange={v => v === "state" ? setSel(meta.lgas) : setSel(s => (s.length === meta.lgas.length ? meta.lgas.slice(0, 3) : s))} options={[["state", "Ondo State"], ["custom", "Pick LGAs"]]} />
+            <p className="note">Ondo State = all {meta.lgas.length} LGAs combined. Pick LGAs to look inside the state.</p>
             <label htmlFor="s">From</label>
             <input id="s" type="month" value={start} min={meta.start} max={meta.end} onChange={e => setStart(e.target.value)} />
             <label htmlFor="e">To</label>
@@ -226,9 +234,22 @@ export default function Analytics({ onLogout }) {
                   <Kpi label="Versus usual for the month" value={signed(kp.vsUsual)} sub="latest minus long-term average" tone={tone(kp.vsUsual)} />
                   <Kpi label="Trend per decade" value={signed(kp.perDecade)} sub={kp.perDecade == null ? "needs 5+ full years" : "linear fit, yearly values"} tone={tone(kp.perDecade)} />
                 </div>
-                <p className="note">Units: {unitOf(name(primary))}. Values are averages across the selected LGAs.</p>
+                <p className="note">Units: {unitOf(name(primary))}. Area shown: <strong>{areaName}</strong>. Values are averages across those LGAs.</p>
+                {sum && (
+                  <>
+                    <h3 className="sec" style={{ marginTop: 12 }}>How the LGAs inside {areaName} compare</h3>
+                    <div className="kpis" style={{ marginTop: 8 }}>
+                      <Kpi label={isState ? "Ondo State average" : "Selected-area average"} value={fmt(sum.avg)} sub={`${unitOf(name(primary))}${ADDITIVE.has(primary) ? " per year" : ""}`} />
+                      <Kpi label="Highest LGA" value={sum.hi.lga} sub={fmt(sum.hi.value)} />
+                      <Kpi label="Lowest LGA" value={sum.lo.lga} sub={fmt(sum.lo.value)} />
+                      <Kpi label="Gap between LGAs" value={fmt(sum.spread)} sub="highest minus lowest" />
+                      <Kpi label="LGAs above average" value={`${sum.above} of ${sum.per.length}`} sub={`${sum.per.length - sum.above} at or below`} />
+                    </div>
+                  </>
+                )}
               </section>
             )}
+            {sum && sel.length > 0 && <Interpret title={`${areaName}: summary in plain words`} items={interpretState(name(primary), primary, sum)} />}
 
             {keys.length > 0 && sel.length > 0 && (
               <>
@@ -315,6 +336,7 @@ export default function Analytics({ onLogout }) {
                     </>
                   ) : <p>Not enough data in this period for a waterfall.</p>}
                 </section>
+                {wf && <Interpret title="Waterfall: what it shows" items={interpretWaterfall(wf.items, name(primary), wfMode)} />}
 
                 <div className="two">
                   <section className="panel">
@@ -338,6 +360,7 @@ export default function Analytics({ onLogout }) {
                       {ADDITIVE.has(primary) ? "Shares of rainfall." : "Shares of the summed averages. This is most meaningful for rainfall."}
                       {pieBy === "season" && " Rainy season is taken as April to October."}
                     </p>
+                    {interpretPie(pie, pieBy, name(primary)).map((t, i) => <p key={i} className="note"><strong>Reading: </strong>{t}</p>)}
                   </section>
 
                   <section className="panel">
@@ -368,6 +391,7 @@ export default function Analytics({ onLogout }) {
                     <p className="note">
                       {sc.fit ? `Correlation r = ${sc.fit.r.toFixed(2)} across ${sc.fit.n} months. Correlation does not show cause.` : "Not enough overlapping data."}
                     </p>
+                    {sc.fit && sx !== sy && <p className="note"><strong>Reading: </strong>{corrSentence(shortLabel(name(sx)), shortLabel(name(sy)), sc.fit.r, NaN, sc.fit.n)} Dry-season and rainy-season points can form separate clusters, so check both colours.</p>}
                   </section>
                 </div>
 
@@ -383,6 +407,7 @@ export default function Analytics({ onLogout }) {
                     {heatBy === "corr" && "Pearson correlation of monthly values across the selected LGAs."}
                   </p>
                 </section>
+                <Interpret title="Heatmap and seasons: what they show" items={[...interpretHeat(heat, heatBy, heatBy === "corr" ? v => v.toFixed(2) : fmt), ...(heatBy === "corr" ? [] : interpretSeason(series, primary, name(primary))), ...interpretAnnual(annualValues(series, primary), name(primary))]} foot="Correlation shows that two things move together. It does not show that one causes the other." />
               </>
             )}
           </div>

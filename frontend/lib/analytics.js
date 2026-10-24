@@ -176,6 +176,8 @@ export function heatMatrix(rows, key, by) {
   }
   const cols = [...colSet].sort((a, b) => a - b);
   const out = Object.keys(cells).sort().map(name => ({ name, cells: cols.map(c => mean(cells[name][c] || [])) }));
+  // First row: Ondo State, the mean of all LGAs for each column.
+  out.unshift({ name: "Ondo State", state: true, cells: cols.map(c => mean(Object.keys(cells).map(n => mean(cells[n][c] || [])))) });
   const all = out.flatMap(r => r.cells).filter(isNum);
   return { cols: cols.map(c => (by === "year" ? String(c) : MONTHS[c - 1])), rows: out, min: Math.min(...all), max: Math.max(...all) };
 }
@@ -191,3 +193,150 @@ export const divColor = v => {
   const [r, g, b] = v >= 0 ? [15, 118, 110] : [190, 18, 60];
   return `rgb(${Math.round(255 + (r - 255) * a)},${Math.round(255 + (g - 255) * a)},${Math.round(255 + (b - 255) * a)})`;
 };
+
+// ================= State-level summary and plain-language interpretation =================
+export const signed = v => (v == null || !isNum(v) ? "–" : (v > 0 ? "+" : "") + fmt(v));
+export const tone = v => (v == null || v === 0 ? "" : v > 0 ? "up" : "down");
+export const pNum = p => (typeof p === "string" ? (p.trim().startsWith("<") ? 0.0005 : parseFloat(p)) : Number(p));
+export const strength = r => (Math.abs(r) < 0.3 ? "weak" : Math.abs(r) < 0.6 ? "moderate" : "strong");
+const low = s => (s || "").toLowerCase();
+const withUnit = (v, unit) => `${fmt(v)}${unit ? (unit === "%" ? "%" : " " + unit) : ""}`;
+
+// One row per LGA: its average (yearly total for rainfall), its trend per decade and its latest month.
+export function lgaStats(rows, key) {
+  const by = new Map();
+  for (const r of rows) { if (!by.has(r.lga)) by.set(r.lga, []); by.get(r.lga).push(r); }
+  const out = [];
+  for (const [lga, rs] of by) {
+    const s = monthlySeries(rs, [key]);
+    const pts = s.filter(x => isNum(x[key]));
+    if (!pts.length) continue;
+    const yearly = annualValues(s, key);
+    const fit = yearly.length >= 5 ? linreg(yearly.map(y => y.year), yearly.map(y => y.value)) : null;
+    const value = ADDITIVE.has(key)
+      ? (yearly.length ? mean(yearly.map(y => y.value)) : mean(pts.map(x => x[key])) * 12) // short window: annualised
+      : mean(pts.map(x => x[key]));
+    out.push({ lga, value, perDecade: fit ? fit.slope * 10 : null, latest: pts[pts.length - 1][key] });
+  }
+  return out.filter(o => isNum(o.value)).sort((a, b) => b.value - a.value);
+}
+
+// State view of one indicator: mean of all LGAs, plus how the LGAs compare with it.
+export function stateSummary(rows, key) {
+  const series = monthlySeries(rows, [key]);
+  const kp = kpis(series, key);
+  const per = lgaStats(rows, key);
+  if (!kp || !per.length) return null;
+  const avg = mean(per.map(p => p.value));
+  const hi = per[0], lo = per[per.length - 1];
+  return { series, kp, per, avg, hi, lo, spread: hi.value - lo.value, above: per.filter(p => p.value > avg).length };
+}
+
+// Month by month: state mean and the lowest/highest LGA (for a shaded band).
+export function bandSeries(rows, key) {
+  const by = new Map();
+  for (const r of rows) {
+    if (!isNum(r[key])) continue;
+    let e = by.get(r.period);
+    if (!e) { e = { period: r.period, v: [] }; by.set(r.period, e); }
+    e.v.push(r[key]);
+  }
+  return [...by.values()].sort((a, b) => (a.period < b.period ? -1 : 1))
+    .map(e => ({ period: e.period, mean: mean(e.v), band: [Math.min(...e.v), Math.max(...e.v)] }));
+}
+
+export function healthNote(key) {
+  if (/rain|precip/.test(key)) return "Why it matters for health: rain creates mosquito breeding sites (malaria) and can cause flooding and unsafe water (cholera, typhoid), while long dry spells strain water supply.";
+  if (/t2m|temp/.test(key)) return "Why it matters for health: temperature changes how fast mosquitoes and malaria parasites develop, and very hot spells raise the risk of heat stress and dehydration.";
+  if (/rh|humid/.test(key)) return "Why it matters for health: humid air helps mosquitoes live longer, which can raise malaria transmission, and damp conditions favour respiratory illness.";
+  if (/soil|sm/.test(key)) return "Why it matters for health: wet soil keeps breeding sites and standing water around, and dry soil stresses crops and food supply.";
+  return "";
+}
+
+export function interpretState(label, key, sum) {
+  const { kp, per, avg, hi, lo, spread, above } = sum;
+  const name = low(shortLabel(label)), unit = unitOf(label);
+  const out = [];
+  out.push(`Across Ondo State the ${kp.additive ? "average yearly total" : "average"} ${name} is ${withUnit(avg, unit)}${kp.additive ? " per year" : ""}, taken as the mean of ${per.length} LGAs.`);
+  if (isNum(kp.vsUsual)) {
+    const usual = kp.latest[key] - kp.vsUsual;
+    const pct = usual ? Math.abs((kp.vsUsual / usual) * 100) : null;
+    out.push(`The latest month (${kp.latest.period}) was ${withUnit(Math.abs(kp.vsUsual), unit)}${pct != null && isFinite(pct) ? ` (${pct.toFixed(0)}%)` : ""} ${kp.vsUsual >= 0 ? "above" : "below"} what is usual for that month.`);
+  }
+  if (isNum(kp.perDecade)) {
+    const tol = /t2m|temp/.test(key) ? 0.05 : Math.abs(avg) * 0.02;
+    out.push(Math.abs(kp.perDecade) < tol
+      ? `Over the period the state-wide level is essentially flat (${signed(kp.perDecade)} ${unit} per decade).`
+      : `Over the period the state-wide level is ${kp.perDecade > 0 ? "rising" : "falling"} by about ${withUnit(Math.abs(kp.perDecade), unit)} per decade. This is a straight-line fit; the Correlations page tests whether it is statistically clear.`);
+  }
+  if (per.length > 1 && avg) {
+    const pct = (spread / Math.abs(avg)) * 100;
+    out.push(`${hi.lga} is highest (${withUnit(hi.value, unit)}) and ${lo.lga} lowest (${withUnit(lo.value, unit)}), a gap of ${withUnit(spread, unit)} (${pct.toFixed(0)}% of the state average). ${above} of ${per.length} LGAs are above the state average.`);
+    out.push(pct < 5 ? "LGAs are very similar, so the state figure describes each of them well." : pct > 15 ? "LGAs differ clearly, so use LGA figures, not the state average, for local decisions." : "LGAs differ moderately. The state figure is a fair guide, but check the LGA you care about.");
+  }
+  const h = healthNote(key); if (h) out.push(h);
+  return out;
+}
+
+export function interpretSeason(series, key, label) {
+  const c = climatology(series, key).filter(d => isNum(d.value));
+  if (c.length < 12) return [];
+  const peak = c.reduce((a, b) => (b.value > a.value ? b : a)), lowM = c.reduce((a, b) => (b.value < a.value ? b : a));
+  const unit = unitOf(label), out = [`${peak.name} is the highest month on average (${withUnit(peak.value, unit)}) and ${lowM.name} the lowest (${withUnit(lowM.value, unit)}).`];
+  if (ADDITIVE.has(key)) {
+    const tot = c.reduce((a, d) => a + d.value, 0), rainy = c.filter(d => RAINY.has(d.month)).reduce((a, d) => a + d.value, 0);
+    if (tot > 0) out.push(`${Math.round((rainy / tot) * 100)}% of the year's rain falls in the rainy season (April to October).`);
+  }
+  return out;
+}
+
+export function interpretAnnual(annual, label) {
+  if (annual.length < 3) return ["Fewer than 3 complete years in this period, so no yearly pattern can be described."];
+  const unit = unitOf(label), hi = annual.reduce((a, b) => (b.value > a.value ? b : a)), lo = annual.reduce((a, b) => (b.value < a.value ? b : a));
+  const avg = mean(annual.map(a => a.value)), last = annual[annual.length - 1], d = last.value - avg;
+  return [
+    `Highest year: ${hi.year} (${withUnit(hi.value, unit)}). Lowest year: ${lo.year} (${withUnit(lo.value, unit)}).`,
+    `${last.year} (the latest complete year) was ${withUnit(Math.abs(d), unit)} ${d >= 0 ? "above" : "below"} the all-years average of ${withUnit(avg, unit)}.`,
+  ];
+}
+
+export function corrSentence(a, b, r, p, n) {
+  if (!isNum(r)) return `${a} and ${b}: not enough overlapping data to measure a link.`;
+  const sig = Number.isFinite(p) && p < 0.05, A = low(a), B = low(b);
+  const base = Math.abs(r) < 0.1
+    ? `${a} and ${B} show almost no link (r = ${r.toFixed(2)}).`
+    : `${a} and ${B} have a ${strength(r)} ${r > 0 ? "positive" : "negative"} link (r = ${r.toFixed(2)}): when ${A} is higher than normal, ${B} tends to be ${r > 0 ? "higher" : "lower"}.`;
+  const known = p != null && Number.isFinite(p);
+  return `${base}${known ? (sig ? " This is unlikely to be chance." : " This could easily be chance.") : ""}${n ? ` (${n} points)` : ""}`;
+}
+
+export function interpretWaterfall(items, label, mode) {
+  const steps = (items || []).filter(i => i.delta != null);
+  if (!steps.length) return [];
+  const unit = unitOf(label), up = steps.reduce((a, b) => (b.delta > a.delta ? b : a)), dn = steps.reduce((a, b) => (b.delta < a.delta ? b : a));
+  const per = mode === "months" ? "month" : "year";
+  return [`Biggest rise: ${up.name} (${signed(up.delta)} ${unit} on the previous ${per}). Biggest fall: ${dn.name} (${signed(dn.delta)} ${unit}).`];
+}
+
+export function interpretPie(pie, by, label) {
+  if (!pie.length) return [];
+  const tot = pie.reduce((a, d) => a + d.value, 0), top = pie.reduce((a, b) => (b.value > a.value ? b : a));
+  const what = by === "lga" ? "LGA" : by === "season" ? "season" : "month";
+  return [`The largest ${what} share is ${top.name} at ${Math.round((top.value / tot) * 100)}% of the total ${low(shortLabel(label))}.`];
+}
+
+export function interpretHeat(heat, by, fmtv = fmt) {
+  if (!heat) return [];
+  if (by === "corr") {
+    let best = null;
+    heat.rows.forEach((r, i) => r.cells.forEach((v, j) => { if (j > i && isNum(v) && (!best || Math.abs(v) > Math.abs(best.v))) best = { v, a: r.name, b: heat.cols[j] }; }));
+    return best ? [corrSentence(best.a, best.b, best.v, NaN)] : [];
+  }
+  let hi = null, lo = null;
+  heat.rows.forEach(r => r.cells.forEach((v, j) => {
+    if (!isNum(v)) return;
+    if (!hi || v > hi.v) hi = { v, r: r.name, c: heat.cols[j] };
+    if (!lo || v < lo.v) lo = { v, r: r.name, c: heat.cols[j] };
+  }));
+  return hi ? [`Darkest cell: ${hi.r}, ${hi.c} (${fmtv(hi.v)}). Lightest: ${lo.r}, ${lo.c} (${fmtv(lo.v)}). The first row is the Ondo State average, so compare each LGA with it.`] : [];
+}

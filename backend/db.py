@@ -40,6 +40,17 @@ surveys = Table("survey_indicator", meta,
                 Column("value", Float), Column("ci_low", Float), Column("ci_high", Float),
                 Column("n", Integer), Column("n_clusters", Integer),
                 Column("note", String(300)))
+# Flood, heat-wave and wind indicators per LGA (filled by hazards.py from daily ERA5). Long format: one row per value.
+hazard_yearly = Table("hazard_lga_year", meta,
+                      Column("lga", String(100), primary_key=True), Column("year", Integer, primary_key=True),
+                      Column("metric", String(40), primary_key=True), Column("value", Float))
+hazard_seasonal = Table("hazard_lga_month", meta,  # average days per calendar month
+                        Column("lga", String(100), primary_key=True), Column("metric", String(40), primary_key=True),
+                        Column("month", Integer, primary_key=True), Column("value", Float))
+hazard_windrose = Table("hazard_windrose", meta,  # season: all / rainy / dry; sector 0..7 = N, NE, E, SE, S, SW, W, NW
+                        Column("lga", String(100), primary_key=True), Column("season", String(10), primary_key=True),
+                        Column("sector", Integer, primary_key=True), Column("freq", Float), Column("speed", Float))
+hazard_meta = Table("hazard_meta", meta, Column("key", String(40), primary_key=True), Column("value", Text))
 SURVEY_KEYS = ["source", "indicator", "survey_year", "geo_level", "geo_name"]
 
 

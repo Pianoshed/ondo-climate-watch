@@ -50,3 +50,10 @@ th{position:sticky;top:0;background:var(--card)}.err{padding:16px 28px;color:#9f
 main>*,.col>*{min-width:0}
 .nav{flex-wrap:wrap;gap:8px 18px}.nav span{overflow-wrap:anywhere}
 @media(max-width:800px){.nav span{margin-left:0}.heat{max-height:420px}}
+.interp{border-left:4px solid var(--acc);background:#f3faf8}.interp h2{margin:0 0 6px}.interp ul{margin:0;padding-left:18px}.interp li{margin:5px 0}
+.kpi.hl{border-color:var(--acc);background:#f3faf8}
+h3.sec{margin:6px 0 0;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.glance tbody tr{cursor:pointer}.glance tbody tr:hover,.glance tbody tr.on{background:#e6f4f2}
+.badge{display:inline-block;background:#e6f4f2;color:var(--acc);border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600}
+.tbl.tall{max-height:420px}
+.up{color:#b45309}.down{color:#1d4ed8}

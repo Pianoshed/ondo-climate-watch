@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from "recharts";
-import { fmt, isNum, linreg } from "../lib/analytics";
+import { corrSentence, fmt, isNum, linreg, mean, pNum as pn, shortLabel, signed, tone } from "../lib/analytics";
+import { Interpret, Kpi } from "./Shared";
 import { mapPaths } from "../lib/geo";
 
 const CLIMATE = ["rain_mm", "t2m", "t2m_max", "rh2m"];
@@ -60,6 +61,11 @@ export default function Surveys({ onLogout }) {
   const fit = chosen?.points.length ? linreg(chosen.points.map(p => p.x), chosen.points.map(p => p.y)) : null;
   const u = item?.unit || "";
   const unit = u === "%" ? "%" : u ? ` ${u}` : ""; // "%" sticks to the number, words like "per 1,000" get a space
+  const stv = state.find(s => isNum(s.value));
+  const lavg = lga.length ? mean(lga.map(r => r.value)) : null;
+  const refv = stv ? stv.value : lavg; // official state estimate if loaded, else the mean of the LGAs
+  const hiL = lga[0], loL = lga[lga.length - 1];
+  const aboveN = refv == null ? 0 : lga.filter(r => r.value > refv).length;
   const lowCount = lga.filter(r => (r.note || "").startsWith("Indicative")).length;
 
   if (items && !items.length) {
@@ -125,6 +131,23 @@ export default function Surveys({ onLogout }) {
               <section className="panel"><p>This indicator has a state estimate only. LGA values need the cluster-level or raster loaders (see the command list in the project notes).</p></section>
             ) : (
               <>
+                <section aria-label="Ondo State key figures">
+                  <h3 className="sec"><span className="badge">Ondo State</span> {item.label}, {year}</h3>
+                  <div className="kpis" style={{ marginTop: 8 }}>
+                    <Kpi hl label={stv ? "State estimate" : "Mean of LGAs"} value={`${fmt(refv)}${unit}`} sub={stv ? (isNum(stv.ci_low) ? `95% CI ${fmt(stv.ci_low)} to ${fmt(stv.ci_high)}` : "survey estimate") : `${lga.length} LGAs, no state-level figure loaded`} />
+                    <Kpi label="Highest LGA" value={hiL.geo_name} sub={`${fmt(hiL.value)}${unit}`} />
+                    <Kpi label="Lowest LGA" value={loL.geo_name} sub={`${fmt(loL.value)}${unit}`} />
+                    <Kpi label="Gap between LGAs" value={`${fmt(hiL.value - loL.value)}${unit}`} sub="highest minus lowest" />
+                    <Kpi label="LGAs above state" value={`${aboveN} of ${lga.length}`} sub={`${lga.length - aboveN} at or below`} />
+                    <Kpi label="Thin-data LGAs" value={`${lowCount} of ${lga.length}`} sub="few clusters or children" />
+                  </div>
+                </section>
+                <Interpret title="Survey indicator: what it shows" items={[
+                  `${item.label} for Ondo State is ${fmt(refv)}${unit} (${stv ? `${item.source} state estimate` : "mean of the LGA values"}). ${hiL.geo_name} is highest at ${fmt(hiL.value)}${unit} and ${loL.geo_name} lowest at ${fmt(loL.value)}${unit}.`,
+                  `${aboveN} of ${lga.length} LGAs are above the state figure. Use the state figure for headline numbers and the LGAs to decide where to look closer.`,
+                  lowCount > 0 ? `${lowCount} LGA values rest on few children or clusters, so quote them as indicative.` : null,
+                  item.source === "MAP" ? "These are modelled values, not a survey count." : null,
+                ]} />
                 {lowCount > 0 && <div className="err">{lowCount} of {lga.length} LGAs have few survey clusters or children. Treat those values as indicative; the table shows n for each.</div>}
                 <div className="two">
                   <section className="panel">
@@ -188,6 +211,10 @@ export default function Surveys({ onLogout }) {
                           </ResponsiveContainer>
                         </div>
                       )}
+                      {chosen && isNum(chosen.r) && <Interpret title="Climate link: what it says" items={[
+                        corrSentence(shortLabel(vars[cv] ?? chosen.label ?? "Climate"), item.label, chosen.r, pn(chosen.p), corr.n_lgas),
+                        "This compares LGAs with each other (places with more of one tend to have more of the other). It does not show that climate causes the health outcome.",
+                      ]} />}
                       {fit && <p className="note">Fitted line: {item.label} changes by {fmt(fit.slope)} per unit of {vars[cv]} (r={fmt(fit.r)}, n={fit.n}).</p>}
                     </>
                   )}
@@ -196,10 +223,10 @@ export default function Surveys({ onLogout }) {
                   <h2>Values</h2>
                   <div className="tbl">
                     <table>
-                      <thead><tr><th>LGA</th><th>Value</th><th>Children / cells (n)</th><th>Clusters</th><th>Note</th></tr></thead>
+                      <thead><tr><th>LGA</th><th>Value</th><th>Vs state</th><th>Children / cells (n)</th><th>Clusters</th><th>Note</th></tr></thead>
                       <tbody>
                         {lga.map(r => (
-                          <tr key={r.geo_name}><td>{r.geo_name}</td><td>{fmt(r.value)}{unit}</td><td>{r.n ?? ""}</td><td>{r.n_clusters ?? ""}</td><td>{(r.note || "").split(ORIGIN_SEP)[0]}</td></tr>
+                          <tr key={r.geo_name}><td>{r.geo_name}</td><td>{fmt(r.value)}{unit}</td><td className={tone(refv == null ? 0 : r.value - refv)}>{refv == null ? "–" : signed(r.value - refv)}</td><td>{r.n ?? ""}</td><td>{r.n_clusters ?? ""}</td><td>{(r.note || "").split(ORIGIN_SEP)[0]}</td></tr>
                         ))}
                       </tbody>
                     </table>

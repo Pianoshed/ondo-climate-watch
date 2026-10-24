@@ -24,6 +24,7 @@ export default function Protected({ children }) {
         <Link href="/correlations">Correlations</Link>
         <Link href="/surveys">Surveys</Link>
         <Link href="/map">Map</Link>
+        <Link href="/hazards">Hazards</Link>
         <Link href="/security">Security</Link>
         <span>{me.email}</span>
         <button className="linkbtn" onClick={logout}>Sign out</button>
