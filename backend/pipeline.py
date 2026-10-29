@@ -19,7 +19,7 @@ import db
 load_dotenv()  # so START_YEAR in .env is read before it is used below
 CACHE = Path(__file__).parent / "data" / "cache"
 # CHIRPS and NASA POWER both go back to 1981; ERA5-Land (era5.py) starts at 1996. Set START_YEAR in .env to change.
-START_YEAR = int(os.environ.get("START_YEAR", "1996"))
+START_YEAR = int(os.environ.get("START_YEAR", "2015"))
 KEYS = ["lga", "year", "month"]
 CHIRPS = "https://data.chc.ucsb.edu/products/CHIRPS-2.0/africa_monthly/tifs/chirps-v2.0.{y}.{m:02d}.tif.gz"
 POWER = "https://power.larc.nasa.gov/api/temporal/monthly/point"
